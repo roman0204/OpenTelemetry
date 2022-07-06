@@ -1,0 +1,204 @@
+version: "3.7"
+
+services:
+
+  webapi:
+    image: vndg/webapi:${TAG:-latest}
+    build:
+      context: .
+      dockerfile: src/SampleWeb/Dockerfile
+    environment: 
+      Redis__Connection: "redis:6379"
+      Kafka__Connection: "kafka:9092"
+      Jaeger__AgentHost: "jaeger"
+      Zipkin__Endpoint: "http://zipkin:9411/api/v2/spans"
+      Seq__Connection: "http://seq:5341"
+      Loki__Connection: "http://loki:3100"
+      GrpcServices__MeteoriteConnection: "http://meteorite-service:5003"
+    ports:
+      - 5000:80
+    restart: on-failure
+    depends_on:
+      - redis
+      - kafka
+      - zipkin
+      - loki
+      - meteorite-service
+      - prometheus
+      - jaeger
+    networks:
+      - coolstore
+
+  meteorite-service:
+    image: vndg/meteorite-service:${TAG:-latest}
+    build:
+      context: .
+      dockerfile: src/MeteoriteService/Dockerfile
+    environment: 
+      Redis__Connection: "redis:6379"
+      Kafka__Connection: "kafka:9092"
+      Jaeger__AgentHost: "jaeger"
+      Zipkin__Endpoint: "http://zipkin:9411/api/v2/spans"
+      Seq__Connection: "http://seq:5341"
+      Loki__Connection: "http://loki:3100"
+    ports:
+      - 5003:5003
+      - 15003:15003
+    restart: on-failure
+    depends_on:
+      - redis
+      - kafka
+      - zipkin
+      - loki
+      - prometheus
+      - jaeger
+    networks:
+      - coolstore
+
+  redis:
+    image: bitnami/redis:5.0.5-debian-9-r124
+    container_name: redis
+    environment:
+      REDIS_PASSWORD: ""
+      ALLOW_EMPTY_PASSWORD: "yes"
+    ports:
+      - 6379:6379
+    restart: on-failure
+    networks:
+      - coolstore
+
+  zookeeper:
+    image: zookeeper:3.5
+    container_name: zookeeper
+    restart: on-failure
+    ports:
+      - 2181:2181
+    networks:
+      - coolstore
+
+  kafka:
+    image: wurstmeister/kafka:2.11-2.0.0
+    container_name: kafka
+    restart: on-failure
+    hostname: kafka
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_ADVERTISED_HOST_NAME: kafka
+      KAFKA_CREATE_TOPICS: "test:1:1"
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+    ports:
+      - 9092:9092
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - coolstore
+
+  zipkin:
+    image: openzipkin/zipkin:latest
+    container_name: zipkin
+    restart: on-failure
+    ports:
+      - 9412:9411
+    networks:
+      - coolstore
+
+  loki:
+    image: grafana/loki:latest
+    container_name: loki
+    ports:
+      - 3100:3100
+    restart: on-failure
+    volumes:
+      - ./config/loki-config.yaml:/etc/loki/loki-config.yaml
+    command: -config.file=/etc/loki/loki-config.yaml
+    depends_on:
+      - promtail
+    networks:
+      - coolstore
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    environment:
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource,grafana-piechart-panel
+    ports:
+      - 3000:3000
+    restart: on-failure
+    volumes:
+      - grafana:/var/lib/grafana
+    depends_on:
+      - loki
+    networks:
+      - coolstore
+
+  promtail:
+    image: grafana/promtail:latest
+    restart: on-failure
+    volumes:
+      - ./config/promtail.yml:/etc/promtail/docker-config.yaml
+    command: -config.file=/etc/promtail/docker-config.yaml
+    networks:
+      - coolstore
+
+  prometheus:
+    image: prom/prometheus:v2.11.1
+    container_name: prometheus
+    volumes:
+      - prometheus:/prometheus
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - 9090:9090
+    restart: on-failure
+    networks:
+      - coolstore
+  
+  cAdvisor:
+    image: google/cadvisor:latest
+    container_name: cAdvisor
+    volumes:
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    ports:
+      - 8080:8080
+    restart: on-failure
+    networks:
+      - coolstore
+
+  jaeger:
+    image: jaegertracing/all-in-one
+    container_name: jaeger
+    restart: on-failure
+    ports:
+      - 5775:5775/udp
+      - 5778:5778
+      - 6831:6831/udp
+      - 6832:6832/udp
+      - 9411:9411
+      - 14268:14268
+      - 16686:16686
+    networks:
+      - coolstore
+
+  # seq:
+  #   image: datalust/seq
+  #   container_name: seq
+  #   restart: on-failure
+  #   environment:
+  #     - ACCEPT_EULA=Y
+  #   ports:
+  #     - 5341:5341
+  #     - 5340:80
+  #   networks:
+  #     - coolstore
+
+volumes:
+  grafana:
+  prometheus:
+  promtail:
+
+networks:
+  coolstore:
+    name: coolstore-network
